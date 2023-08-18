@@ -2,7 +2,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 5.4"
     }
   }
 }
@@ -34,46 +34,55 @@ variable "key_name" {
   default     = "local"
 }
 
-resource "aws_instance" "vm1" {
-  ami           = data.aws_ami.ubuntu.id
-  instance_type = "c6a.large"
-  key_name      = var.key_name
+resource "aws_instance" "attestation" {
+  ami                    = data.aws_ami.ubuntu.id
+  instance_type          = "c6a.large"
+  key_name               = var.key_name
+  source_dest_check      = false
 
   cpu_options {
     amd_sev_snp = "enabled"
   }
 
   tags = {
-    Name = "vm1"
+    Name = "attestation"
   }
 
   connection {
+    type        = "ssh"
     host        = self.public_ip
     user        = "ubuntu"
     private_key = file("~/.ssh/${var.key_name}.pem")
-    agent       = true
   }
+
+  user_data = <<-EOFF
+    #!/bin/bash
+    sudo apt update
+    sudo apt install -y build-essential git libssl-dev uuid-dev autoconf
+    git clone https://github.com/AMDESE/sev-guest.git
+    cd sev-guest
+    make sev-guest-get-report
+    make sev-guest-parse-report
+    sudo ./sev-guest-get-report guest_report.bin -x
+    sudo mkdir certs
+    sudo openssl x509 -inform der -in a8074bc2-a25a-483e-aae6-39c045a0b8a1 -out certs/vcek.pem
+    sudo curl --proto '=https' --tlsv1.2 -sSf https://kdsintf.amd.com/vlek/v1/Milan/cert_chain -o certs/cert_chain.pem
+    sudo openssl verify --CAfile certs/cert_chain.pem certs/vcek.pem
+    sudo cp guest_report.bin certs/
+    cd ..
+    git clone https://github.com/AMDESE/sev-tool.git
+    cd sev-tool
+    autoreconf -vif && ./configure && make
+    sudo ./src/sevtool --ofolder ../sev-guest/certs --validate_guest_report
+  EOFF
 
   provisioner "remote-exec" {
     inline = [
-      "sudo apt update",
-      "sudo apt install -y build-essential git libssl-dev uuid-dev autoconf",
-      "git clone https://github.com/AMDESE/sev-guest.git",
-      "cd sev-guest",
-      "make sev-guest-get-report",
-      "make sev-guest-parse-report",
-      "sudo ./sev-guest-get-report guest_report.bin -x",
-      "sudo mkdir certs",
-      "sudo openssl x509 -inform der -in a8074bc2-a25a-483e-aae6-39c045a0b8a1 -out certs/vcek.pem",
-      "sudo curl --proto '=https' --tlsv1.2 -sSf https://kdsintf.amd.com/vlek/v1/Milan/cert_chain -o certs/cert_chain.pem",
-      "sudo openssl verify --CAfile certs/cert_chain.pem certs/vcek.pem",
-      "sudo cp guest_report.bin certs/",
-      "cd ..",
-      "git clone https://github.com/AMDESE/sev-tool.git",
-      "cd sev-tool",
-      "autoreconf -vif && ./configure && make",
-      "sudo ./src/sevtool --ofolder ../sev-guest/certs --validate_guest_report"
+      "echo 'Waiting for cloud-init to complete...'",
+      "cloud-init status --wait > /dev/null",
+      "echo 'Completed cloud-init!'",
     ]
+    on_failure = continue
   }
 
 }

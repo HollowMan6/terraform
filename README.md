@@ -1,2 +1,2 @@
 # terraform
-AWS AMD SEV-SNP Terraform scripts
+AWS AMD SEV-SNP Terraform script for automated attestation
