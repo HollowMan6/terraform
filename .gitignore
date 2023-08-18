@@ -1,3 +1,6 @@
+ec2-login-key.pub
+ec2-login-key
+
 # Local .terraform directories
 **/.terraform/*
 
